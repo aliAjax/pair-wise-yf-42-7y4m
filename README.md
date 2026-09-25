@@ -33,9 +33,18 @@ python3 app.py --db ./data.db --port 8308
 - `POST /api/<kind>`：创建对象；请求体为JSON。
 - `GET /api/entities/<id>`：读取对象当前版本。
 - `POST /api/entities/<id>/actions`：提交`{"action":"动作名","data":{...},"expected_version":数字}`。
+- `GET /api/overview`：按繁育周期汇总配对建议与占用，首页看板使用此接口。
 - `GET /api/audit`：读取审计记录。
 
 请求身份通过`X-User-Id`和`X-Role`请求头传入。创建和动作的可执行角色由规则引擎控制。
+
+## 配对档期规则
+
+- 配对建议创建时必须带`cycle`（繁育周期）与`venue`（场馆）；`sire_id`/`dam_id`可在批准前补齐。
+- 批准（`approve`）时重新核对双方：同一`cycle`内只要任一方已被其他`approved`/`completed`配对占用即拒绝（409），错误信息包含冲突个体名称、ID与占用配对编号；亲本处于`quarantined`（隔离）或`deceased`（死亡）时同样拒绝（400）。被拦截的建议保持`proposed`。
+- `rejected`配对不占用档期；已批准但未完成的建议也可以`reject`，驳回后双方档期立即释放，其他待审批建议可以重新批准。
+- 批准的「读取占用→规则校验→写入→审计」在单个`BEGIN IMMEDIATE`事务内完成，两个协调员同时批准同一批动物时只有一条成功，另一条收到409且不会重复占用。
+- 首页（`/`）按周期展示场馆、已占用个体、每条建议的状态与当前冲突提示。
 
 ## 测试
 

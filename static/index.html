@@ -5,30 +5,278 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>动物园谱系与繁育协调</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 820px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    :root { --line:#e5e7eb; --muted:#6b7280; --red:#b91c1c; --red-bg:#fef2f2; --green:#166534; --green-bg:#f0fdf4; --amber:#92400e; --amber-bg:#fffbeb; --blue:#1e40af; --blue-bg:#eff6ff; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background:#f9fafb; color:#1f2937; }
+    main { max-width: 1000px; margin: auto; padding: 1.5rem 1.25rem 4rem; }
+    h1 { font-size: 1.4rem; margin: .25rem 0 1rem; }
+    h2 { font-size: 1.1rem; margin: 1.75rem 0 .75rem; }
+    .bar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; background:#fff; border:1px solid var(--line); border-radius:10px; padding:.6rem .8rem; }
+    .bar label { font-size:.85rem; color:var(--muted); }
+    input, select, button { font: inherit; padding:.4rem .55rem; border:1px solid #d1d5db; border-radius:6px; background:#fff; }
+    button { cursor:pointer; background:#111827; color:#fff; border-color:#111827; }
+    button.secondary { background:#fff; color:#1f2937; }
+    button.danger { background:#b91c1c; border-color:#b91c1c; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    #message { margin:.75rem 0; padding:.6rem .8rem; border-radius:8px; display:none; white-space:pre-wrap; font-size:.9rem; }
+    #message.ok { display:block; background:var(--green-bg); color:var(--green); border:1px solid #bbf7d0; }
+    #message.err { display:block; background:var(--red-bg); color:var(--red); border:1px solid #fecaca; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+    @media (max-width: 760px){ .grid { grid-template-columns:1fr; } }
+    .panel { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.9rem; }
+    .panel form { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
+    .panel form .full { grid-column:1 / -1; }
+    .panel form button { grid-column:1 / -1; }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th, td { text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--line); }
+    .cycle { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.9rem 1rem; margin-bottom:1rem; }
+    .cycle h3 { margin:0 0 .25rem; font-size:1.05rem; }
+    .tags { color:var(--muted); font-size:.85rem; margin-bottom:.6rem; }
+    .tag { display:inline-block; background:#f3f4f6; border-radius:999px; padding:.1rem .6rem; margin-right:.3rem; }
+    .tag.occupied { background:var(--blue-bg); color:var(--blue); }
+    .pairing { border:1px solid var(--line); border-radius:8px; padding:.6rem .7rem; margin:.5rem 0; }
+    .pairing.conflict { border-color:#fecaca; background:var(--red-bg); }
+    .pairing .row1 { display:flex; justify-content:space-between; gap:.5rem; flex-wrap:wrap; align-items:center; }
+    .pid { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.82rem; color:var(--muted); }
+    .badge { font-size:.75rem; border-radius:999px; padding:.12rem .6rem; }
+    .badge.proposed { background:var(--amber-bg); color:var(--amber); }
+    .badge.approved { background:var(--green-bg); color:var(--green); }
+    .badge.completed { background:#f3f4f6; color:#374151; }
+    .badge.rejected { background:#f3f4f6; color:var(--muted); text-decoration:line-through; }
+    .meta { font-size:.85rem; margin:.25rem 0; }
+    .warnings { margin:.35rem 0 0; padding:.35rem .6rem; border-radius:6px; background:#fee2e2; color:var(--red); font-size:.84rem; }
+    .actions { margin-top:.5rem; display:flex; gap:.4rem; flex-wrap:wrap; }
+    .hint { color:var(--muted); font-size:.85rem; }
   </style>
 </head>
 <body>
 <main>
-  <h1>动物园谱系与繁育协调</h1>
-  <p>这是最小演示页面。使用浏览器或 curl 调用 JSON API。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
-  <pre id="result">等待操作</pre>
-  <h2>常用接口</h2>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-GET  /api/entities/&lt;id&gt;
-POST /api/entities/&lt;id&gt;/actions</pre>
+  <h1>动物园谱系与繁育协调 · 配对档期看板</h1>
+
+  <div class="bar">
+    <label>操作人 <input id="user" value="coord-1" size="10"></label>
+    <label>角色
+      <select id="role">
+        <option value="coordinator" selected>coordinator（繁育协调员）</option>
+        <option value="admin">admin</option>
+        <option value="veterinarian">veterinarian</option>
+        <option value="registrar">registrar</option>
+        <option value="viewer">viewer</option>
+      </select>
+    </label>
+    <button onclick="loadAll()">刷新看板</button>
+    <span class="hint">批准同周期撞车、亲本隔离/死亡时会返回 409/400，建议保持待审批。</span>
+  </div>
+  <div id="message"></div>
+
+  <h2>繁育周期</h2>
+  <div id="cycles"><p class="hint">加载中…</p></div>
+
+  <h2>登记个体</h2>
+  <div class="panel">
+    <form onsubmit="return createAnimal(event)">
+      <input id="animal-name" placeholder="名称，如 M-2">
+      <select id="animal-sex"><option value="male">male 公</option><option value="female">female 母</option><option value="unknown">unknown</option></select>
+      <button class="full">登记</button>
+    </form>
+  </div>
+
+  <h2>个体状态</h2>
+  <div class="panel"><table id="animals"></table></div>
+
+  <h2>新建配对建议</h2>
+  <div class="panel">
+    <form onsubmit="return createPairing(event)">
+      <input id="p-cycle" placeholder="繁育周期，如 2026-autumn">
+      <input id="p-venue" placeholder="场馆，如 A馆">
+      <select id="p-sire"></select>
+      <select id="p-dam"></select>
+      <input id="p-proposed" placeholder="提议人（默认操作人）">
+      <button class="full">提交建议（待审批）</button>
+    </form>
+  </div>
 </main>
+
 <script>
-async function checkHealth() {
-  const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+let state = { animals: [], cycles: [] };
+
+function actorHeaders(extra) {
+  return Object.assign({
+    'X-User-Id': document.getElementById('user').value || 'anonymous',
+    'X-Role': document.getElementById('role').value,
+    'Content-Type': 'application/json'
+  }, extra || {});
 }
+
+function showMessage(text, ok) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = ok ? 'ok' : 'err';
+}
+
+function clearMessage() {
+  document.getElementById('message').className = '';
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    let text = body.error || ('HTTP ' + res.status);
+    if (body.details && body.details.blockers) text += '\n— ' + body.details.blockers.join('\n— ');
+    const err = new Error(text);
+    err.payload = body;
+    throw err;
+  }
+  return body;
+}
+
+function animalName(id) {
+  const a = state.animals.find(x => x.id === id);
+  return a ? (a.name || a.id) : id;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadAll() {
+  clearMessage();
+  try {
+    const overview = await api('/api/overview', { headers: actorHeaders() });
+    state = overview;
+    renderAnimals();
+    renderCycles();
+    renderPairingSelects();
+  } catch (err) {
+    showMessage(err.message, false);
+  }
+}
+
+function renderAnimals() {
+  const rows = ['<tr><th>名称</th><th>性别</th><th>状态</th><th>操作</th></tr>'];
+  for (const a of state.animals) {
+    const actions = [];
+    if (a.status === 'active') actions.push(`<button class="secondary" onclick="quarantine('${a.id}')">隔离</button>`);
+    if (a.status === 'quarantined') actions.push(`<button class="secondary" onclick="releaseQuarantine('${a.id}')">解除隔离</button>`);
+    if (a.status !== 'deceased') actions.push(`<button class="danger" onclick="markDeceased('${a.id}')">标记死亡</button>`);
+    rows.push(`<tr><td>${escapeHtml(a.name)}</td><td>${a.sex}</td><td>${a.status}</td><td><div class="actions">${actions.join('')}</div></td></tr>`);
+  }
+  document.getElementById('animals').innerHTML = rows.join('');
+}
+
+function renderPairingSelects() {
+  const males = state.animals.filter(a => a.sex === 'male' && a.status === 'active');
+  const females = state.animals.filter(a => a.sex === 'female' && a.status === 'active');
+  const opt = a => `<option value="${a.id}">${escapeHtml(a.name)} (${a.id})</option>`;
+  document.getElementById('p-sire').innerHTML = '<option value="">选择父本…</option>' + males.map(opt).join('');
+  document.getElementById('p-dam').innerHTML = '<option value="">选择母本…</option>' + females.map(opt).join('');
+}
+
+function pairingActions(p) {
+  const acts = [];
+  if (p.status === 'proposed') acts.push(`<button onclick="approve('${p.id}', ${p.version})">批准</button>`);
+  if (p.status === 'proposed' || p.status === 'approved') acts.push(`<button class="danger" onclick="reject('${p.id}')">驳回</button>`);
+  if (p.status === 'approved') acts.push(`<button class="secondary" onclick="complete('${p.id}')">完成登记</button>`);
+  return acts.length ? `<div class="actions">${acts.join('')}</div>` : '';
+}
+
+function renderCycles() {
+  if (!state.cycles.length) {
+    document.getElementById('cycles').innerHTML = '<p class="hint">暂无配对建议。先登记个体并新建一条建议。</p>';
+    return;
+  }
+  document.getElementById('cycles').innerHTML = state.cycles.map(c => {
+    const occupied = c.occupied_animal_ids.map(id => `<span class="tag occupied">占用 ${escapeHtml(animalName(id))}</span>`).join('');
+    const venues = c.venues.map(v => `<span class="tag">${escapeHtml(v)}</span>`).join('');
+    const pairs = c.pairings.map(p => {
+      const conflict = p.warnings && p.warnings.length;
+      const warnings = conflict ? `<div class="warnings">⚠ ${p.warnings.map(escapeHtml).join('<br>⚠ ')}</div>` : '';
+      return `<div class="pairing ${conflict ? 'conflict' : ''}">
+        <div class="row1">
+          <span><strong>${escapeHtml(animalName(p.sire_id))}</strong> ♂ × <strong>${escapeHtml(animalName(p.dam_id))}</strong> ♀</span>
+          <span class="badge ${p.status}">${p.status}</span>
+        </div>
+        <div class="meta">场馆 ${escapeHtml(p.venue || '-')} · 提议人 ${escapeHtml(p.proposed_by || '-')}</div>
+        <div class="pid">${p.id} · v${p.version}</div>
+        ${warnings}
+        ${pairingActions(p)}
+      </div>`;
+    }).join('');
+    return `<div class="cycle">
+      <h3>周期 ${escapeHtml(c.cycle)}</h3>
+      <div class="tags">${venues}${occupied}</div>
+      ${pairs}
+    </div>`;
+  }).join('');
+}
+
+async function act(path, body) {
+  try {
+    await api(path, { method: 'POST', headers: actorHeaders(), body: JSON.stringify(body) });
+    showMessage('操作成功', true);
+  } catch (err) {
+    showMessage(err.message, false);
+  }
+  await loadAll();
+}
+
+async function createAnimal(event) {
+  event.preventDefault();
+  await act('/api/animal', {
+    name: document.getElementById('animal-name').value.trim(),
+    sex: document.getElementById('animal-sex').value
+  });
+  document.getElementById('animal-name').value = '';
+  return false;
+}
+
+async function createPairing(event) {
+  event.preventDefault();
+  const proposed = document.getElementById('p-proposed').value.trim() || document.getElementById('user').value;
+  await act('/api/pairing', {
+    proposed_by: proposed,
+    cycle: document.getElementById('p-cycle').value.trim(),
+    venue: document.getElementById('p-venue').value.trim(),
+    sire_id: document.getElementById('p-sire').value,
+    dam_id: document.getElementById('p-dam').value
+  });
+  return false;
+}
+
+function approve(id, version) {
+  const approvals = (prompt('兽医/审批确认（逗号分隔）', 'vet-1') || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!approvals.length) return;
+  return act(`/api/entities/${id}/actions`, { action: 'approve', data: { approvals }, expected_version: version });
+}
+
+function reject(id) {
+  const reason = prompt('驳回原因');
+  if (!reason) return;
+  return act(`/api/entities/${id}/actions`, { action: 'reject', data: { reason } });
+}
+
+function complete(id) {
+  return act(`/api/entities/${id}/actions`, { action: 'complete', data: { offspring_ids: ['offspring-' + Date.now()] } });
+}
+
+function quarantine(id) {
+  const reason = prompt('隔离原因', '观察');
+  if (!reason) return;
+  return act(`/api/entities/${id}/actions`, { action: 'quarantine_animal', data: { reason } });
+}
+
+function releaseQuarantine(id) {
+  return act(`/api/entities/${id}/actions`, { action: 'release_quarantine', data: {} });
+}
+
+function markDeceased(id) {
+  const cause = prompt('死亡原因', 'illness');
+  if (!cause) return;
+  return act(`/api/entities/${id}/actions`, { action: 'mark_deceased', data: { cause } });
+}
+
+loadAll();
 </script>
 </body>
 </html>
