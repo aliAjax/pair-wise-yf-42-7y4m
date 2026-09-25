@@ -11,7 +11,7 @@
 - `src/service.py`：用例编排、幂等处理、版本控制和审计写入。
 - `src/http_api.py`：HTTP路由、请求解析和统一错误响应。
 - `src/audit.py`：实体操作审计时间线。
-- `static/index.html`：最小演示页面。
+- `static/index.html`：按繁育周期展示配对建议与占用情况的看板页面。
 - `tests/`：完整流程、规则和失败场景测试。
 
 ## 初始化与启动
@@ -25,6 +25,13 @@ python3 app.py --db ./data.db --port 8308
 ## 核心对象
 
 - `animal`：个体谱系；`pairing`：配对建议；`transfer`：机构和运输记录。
+- `pairing`创建时必须带`cycle`（繁育周期）和`venue`（场馆），可选带`sire_id`/`dam_id`（拟配公母）。
+
+## 配对档期规则
+
+- 批准（`approve`）时核对公母双方：任一亲本在同一`cycle`下已被另一条`approved`配对占用，或亲本处于隔离（`quarantined`）/死亡（`deceased`）状态，都会返回错误并指明冲突个体与占用配对编号，当前建议保持`proposed`（待审批）不变。
+- 驳回（`reject`）允许从`proposed`或`approved`执行；驳回已批准配对即释放双方档期，其他建议可重新批准。
+- 校验与状态更新在同一事务内完成，并发批准不会让同一动物在同一周期被占用两次。
 
 ## 主要接口
 
@@ -33,6 +40,7 @@ python3 app.py --db ./data.db --port 8308
 - `POST /api/<kind>`：创建对象；请求体为JSON。
 - `GET /api/entities/<id>`：读取对象当前版本。
 - `POST /api/entities/<id>/actions`：提交`{"action":"动作名","data":{...},"expected_version":数字}`。
+- `GET /api/overview`：按繁育周期聚合配对建议与占用情况，供首页看板使用。
 - `GET /api/audit`：读取审计记录。
 
 请求身份通过`X-User-Id`和`X-Role`请求头传入。创建和动作的可执行角色由规则引擎控制。

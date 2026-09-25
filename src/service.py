@@ -11,8 +11,10 @@ class DomainService:
         self.rules = rules or RuleEngine()
         self.audit = AuditTrail(repository)
 
-    def _lookup(self, kind, field, value):
-        return self.repository.find_entities(self.rules.normalize_kind(kind), field, value)
+    def _lookup(self, kind, field, value, connection=None):
+        return self.repository.find_entities(
+            self.rules.normalize_kind(kind), field, value, connection=connection
+        )
 
     def health(self):
         return {"status": "ok" if self.repository.ping() else "error"}
@@ -38,16 +40,24 @@ class DomainService:
         return entity
 
     def transition(self, actor, entity_id, action, data=None, expected_version=None):
-        entity = self.repository.get_entity(entity_id)
-        if not entity:
-            raise NotFoundError("entity not found: " + entity_id)
-        expected = int(expected_version) if expected_version is not None else entity["version"]
-        next_status, patch = self.rules.validate_transition(
-            actor, entity, action, dict(data or {}), self._lookup
-        )
-        merged = dict(entity["data"])
-        merged.update(patch)
-        updated = self.repository.update_entity(entity_id, expected, next_status, merged)
+        with self.repository.transaction() as connection:
+            entity = self.repository.get_entity(entity_id, connection=connection)
+            if not entity:
+                raise NotFoundError("entity not found: " + entity_id)
+            expected = (
+                int(expected_version) if expected_version is not None else entity["version"]
+            )
+            lookup = lambda kind, field, value: self._lookup(  # noqa: E731
+                kind, field, value, connection=connection
+            )
+            next_status, patch = self.rules.validate_transition(
+                actor, entity, action, dict(data or {}), lookup
+            )
+            merged = dict(entity["data"])
+            merged.update(patch)
+            updated = self.repository.update_entity(
+                entity_id, expected, next_status, merged, connection=connection
+            )
         self.audit.record(
             entity_id,
             actor,
@@ -68,6 +78,54 @@ class DomainService:
         if kind:
             kind = self.rules.normalize_kind(kind)
         return self.repository.list_entities(kind=kind, status=status)
+
+    @staticmethod
+    def _animal_brief(animals, animal_id):
+        if not animal_id:
+            return None
+        animal = animals.get(animal_id)
+        if not animal:
+            return {"id": animal_id, "name": None, "status": "missing"}
+        return {
+            "id": animal_id,
+            "name": animal["data"].get("name"),
+            "status": animal["status"],
+        }
+
+    def cycle_overview(self):
+        pairings = self.repository.list_entities(kind="pairing")
+        animals = {
+            animal["id"]: animal
+            for animal in self.repository.list_entities(kind="animal")
+        }
+        cycles = {}
+        for pairing in pairings:
+            data = pairing["data"]
+            cycle = str(data.get("cycle") or "未设置")
+            bucket = cycles.setdefault(
+                cycle, {"cycle": cycle, "suggestions": [], "occupancy": []}
+            )
+            entry = {
+                "id": pairing["id"],
+                "status": pairing["status"],
+                "venue": data.get("venue"),
+                "sire": self._animal_brief(animals, data.get("sire_id")),
+                "dam": self._animal_brief(animals, data.get("dam_id")),
+            }
+            bucket["suggestions"].append(entry)
+            if pairing["status"] == "approved":
+                for role in ("sire", "dam"):
+                    brief = entry[role]
+                    if brief:
+                        bucket["occupancy"].append(
+                            {
+                                "animal_id": brief["id"],
+                                "animal_name": brief["name"],
+                                "pairing_id": pairing["id"],
+                                "venue": data.get("venue"),
+                            }
+                        )
+        return {"cycles": sorted(cycles.values(), key=lambda item: item["cycle"])}
 
     def audit_log(self, entity_id=None):
         return self.repository.list_audit(entity_id=entity_id)

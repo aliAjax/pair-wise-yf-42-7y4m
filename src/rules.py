@@ -27,27 +27,71 @@ def inbreeding_coefficient(sire, dam):
     return 0.0
 
 
+def _animal_label(animal):
+    name = animal["data"].get("name")
+    return "%s (%s)" % (name, animal["id"]) if name else animal["id"]
+
+
+def _validate_pairing_create(actor, data, lookup):
+    for key in ("sire_id", "dam_id"):
+        animal_id = data.get(key)
+        if animal_id and not _find_one(lookup, "animal", "id", animal_id):
+            raise ValidationError("unknown animal for %s: %s" % (key, animal_id))
+
+
 def _validate_pairing(actor, entity, data, lookup):
     sire = _find_one(lookup, "animal", "id", data.get("sire_id"))
     dam = _find_one(lookup, "animal", "id", data.get("dam_id"))
     if not sire or not dam:
         raise ValidationError("pairing requires two existing animals")
-    if sire["status"] != "active" or dam["status"] != "active":
-        raise ValidationError("pairing animals must be active")
+    for animal in (sire, dam):
+        if animal["status"] != "active":
+            raise ValidationError(
+                "animal %s is %s and cannot be paired"
+                % (_animal_label(animal), animal["status"]),
+                details={
+                    "animal_id": animal["id"],
+                    "animal_name": animal["data"].get("name"),
+                    "status": animal["status"],
+                },
+            )
     if inbreeding_coefficient(sire["data"], dam["data"]) > 0.125:
         raise ValidationError("pairing exceeds inbreeding threshold")
+    _ensure_cycle_available(entity, sire, dam, lookup)
     return {"approved_by": actor.user_id}
 
 
-CUSTOM_CREATE = {'animal': _validate_animal}
+def _ensure_cycle_available(entity, sire, dam, lookup):
+    cycle = entity["data"].get("cycle")
+    candidates = {sire["id"]: sire, dam["id"]: dam}
+    for other in lookup("pairing", "status", "approved") or []:
+        if other["id"] == entity["id"] or other["data"].get("cycle") != cycle:
+            continue
+        for key in ("sire_id", "dam_id"):
+            occupied = other["data"].get(key)
+            if occupied in candidates:
+                animal = candidates[occupied]
+                raise ConflictError(
+                    "animal %s is already occupied by approved pairing %s in cycle %s"
+                    % (_animal_label(animal), other["id"], cycle),
+                    details={
+                        "animal_id": occupied,
+                        "animal_name": animal["data"].get("name"),
+                        "occupied_by": other["id"],
+                        "cycle": cycle,
+                    },
+                )
+
+
+CUSTOM_CREATE = {'animal': _validate_animal, 'pairing': _validate_pairing_create}
 CUSTOM_TRANSITIONS = {('pairing', 'approve'): _validate_pairing}
 
 
 class RuleEngine:
     ALIASES = {'animals': 'animal', 'pairings': 'pairing', 'transfers': 'transfer'}
     INITIAL_STATUS = {'animal': 'active', 'pairing': 'proposed', 'transfer': 'planned'}
-    TRANSITIONS = {'animal': {'mark_deceased': (('active',), 'deceased'), 'quarantine_animal': (('active',), 'quarantined'), 'release_quarantine': (('quarantined',), 'active')}, 'pairing': {'approve': (('proposed',), 'approved'), 'reject': (('proposed',), 'rejected'), 'complete': (('approved',), 'completed')}, 'transfer': {'authorize': (('planned',), 'authorized'), 'ship': (('authorized',), 'in_transit'), 'arrive': (('in_transit',), 'completed')}}
-    CREATE_REQUIRED = {'animal': ('name', 'sex'), 'pairing': ('proposed_by',), 'transfer': ('animal_id', 'from_institution', 'to_institution')}
+    TRANSITIONS = {'animal': {'mark_deceased': (('active',), 'deceased'), 'quarantine_animal': (('active',), 'quarantined'), 'release_quarantine': (('quarantined',), 'active')}, 'pairing': {'approve': (('proposed',), 'approved'), 'reject': (('proposed', 'approved'), 'rejected'), 'complete': (('approved',), 'completed')}, 'transfer': {'authorize': (('planned',), 'authorized'), 'ship': (('authorized',), 'in_transit'), 'arrive': (('in_transit',), 'completed')}}
+    CREATE_REQUIRED = {'animal': ('name', 'sex'), 'pairing': ('proposed_by', 'cycle', 'venue'), 'transfer': ('animal_id', 'from_institution', 'to_institution')}
     ACTION_REQUIRED = {('animal', 'mark_deceased'): ('cause',), ('animal', 'quarantine_animal'): ('reason',), ('pairing', 'approve'): ('sire_id', 'dam_id', 'approvals'), ('pairing', 'reject'): ('reason',), ('pairing', 'complete'): ('offspring_ids',), ('transfer', 'authorize'): ('permit_id',), ('transfer', 'ship'): ('transport_id',), ('transfer', 'arrive'): ('arrival_date',)}
     CREATE_ROLES = {'animal': ('admin', 'registrar'), 'pairing': ('admin', 'coordinator'), 'transfer': ('admin', 'registrar')}
     ROLE_ACTIONS = {'mark_deceased': ('admin', 'veterinarian'), 'quarantine_animal': ('admin', 'veterinarian'), 'release_quarantine': ('admin', 'veterinarian'), 'approve': ('admin', 'coordinator'), 'reject': ('admin', 'coordinator'), 'complete': ('admin', 'coordinator'), 'authorize': ('admin', 'registrar'), 'ship': ('admin', 'registrar'), 'arrive': ('admin', 'registrar')}

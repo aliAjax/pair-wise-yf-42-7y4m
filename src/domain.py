@@ -6,6 +6,10 @@ from typing import Any, Dict, Optional
 class DomainError(Exception):
     """Base error for domain failures."""
 
+    def __init__(self, message="", details=None):
+        super().__init__(message)
+        self.details = dict(details or {})
+
 
 class ValidationError(DomainError):
     """Input does not satisfy a domain rule."""

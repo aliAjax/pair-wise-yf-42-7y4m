@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .domain import ConflictError, NotFoundError
@@ -18,6 +19,19 @@ class SQLiteRepository:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         return connection
+
+    @contextmanager
+    def transaction(self):
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _initialize(self):
         with self._connect() as connection:
@@ -80,14 +94,16 @@ class SQLiteRepository:
             )
         return self.get_entity(entity_id)
 
-    def get_entity(self, entity_id):
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM entities WHERE id = ?", (entity_id,)
-            ).fetchone()
+    def get_entity(self, entity_id, connection=None):
+        sql = "SELECT * FROM entities WHERE id = ?"
+        if connection is None:
+            with self._connect() as connection:
+                row = connection.execute(sql, (entity_id,)).fetchone()
+        else:
+            row = connection.execute(sql, (entity_id,)).fetchone()
         return self._entity_from_row(row) if row else None
 
-    def list_entities(self, kind=None, status=None):
+    def list_entities(self, kind=None, status=None, connection=None):
         clauses = []
         params = []
         if kind:
@@ -97,48 +113,51 @@ class SQLiteRepository:
             clauses.append("status = ?")
             params.append(status)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM entities" + where + " ORDER BY created_at, id", params
-            ).fetchall()
+        sql = "SELECT * FROM entities" + where + " ORDER BY created_at, id"
+        if connection is None:
+            with self._connect() as connection:
+                rows = connection.execute(sql, params).fetchall()
+        else:
+            rows = connection.execute(sql, params).fetchall()
         return [self._entity_from_row(row) for row in rows]
 
-    def find_entities(self, kind, field, value):
+    def find_entities(self, kind, field, value, connection=None):
+        if field == "status":
+            return self.list_entities(kind=kind, status=value, connection=connection)
         return [
             entity
-            for entity in self.list_entities(kind=kind)
+            for entity in self.list_entities(kind=kind, connection=connection)
             if (entity["id"] == value if field == "id" else entity["data"].get(field) == value)
         ]
 
-    def update_entity(self, entity_id, expected_version, status, data):
+    def update_entity(self, entity_id, expected_version, status, data, connection=None):
+        if connection is None:
+            with self.transaction() as connection:
+                return self._update_entity(
+                    connection, entity_id, expected_version, status, data
+                )
+        return self._update_entity(connection, entity_id, expected_version, status, data)
+
+    def _update_entity(self, connection, entity_id, expected_version, status, data):
         now = utcnow()
         payload = json.dumps(data, ensure_ascii=False, sort_keys=True)
-        connection = self._connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT version FROM entities WHERE id = ?", (entity_id,)
-            ).fetchone()
-            if not row:
-                raise NotFoundError("entity not found: " + entity_id)
-            current_version = int(row["version"])
-            if expected_version is not None and current_version != int(expected_version):
-                raise ConflictError(
-                    "version conflict: expected %s, found %s"
-                    % (expected_version, current_version)
-                )
-            connection.execute(
-                "UPDATE entities SET status = ?, version = version + 1, data = ?, updated_at = ? "
-                "WHERE id = ? AND version = ?",
-                (status, payload, now, entity_id, current_version),
+        row = connection.execute(
+            "SELECT version FROM entities WHERE id = ?", (entity_id,)
+        ).fetchone()
+        if not row:
+            raise NotFoundError("entity not found: " + entity_id)
+        current_version = int(row["version"])
+        if expected_version is not None and current_version != int(expected_version):
+            raise ConflictError(
+                "version conflict: expected %s, found %s"
+                % (expected_version, current_version)
             )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-        return self.get_entity(entity_id)
+        connection.execute(
+            "UPDATE entities SET status = ?, version = version + 1, data = ?, updated_at = ? "
+            "WHERE id = ? AND version = ?",
+            (status, payload, now, entity_id, current_version),
+        )
+        return self.get_entity(entity_id, connection=connection)
 
     def append_audit(self, entity_id, actor_id, actor_role, action, from_status, to_status, detail):
         with self._connect() as connection:
